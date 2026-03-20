@@ -21,6 +21,8 @@ from pyromod.config import config
 
 The `timeout_handler` is an optional callback function that you can set to handle timeouts for listeners. If you want to define a custom function to handle timeouts, you can assign it to `config.timeout_handler`.
 
+It always receives `identifier`, `listener`, and `timeout`. When the timeout comes from `Client.ask()`, pyromod also makes the prompt message available for cleanup through `listener.sent_message`. If your handler signature supports it, pyromod will also pass that message as the optional `sent_message` argument.
+
 Example:
 
 ```python

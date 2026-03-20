@@ -1,5 +1,6 @@
 import asyncio
-from inspect import iscoroutinefunction
+from functools import partial
+from inspect import Parameter, iscoroutinefunction, signature
 from typing import Optional, Callable, Dict, List, Union
 
 import pyrogram
@@ -156,6 +157,64 @@ class Client(pyrogram.Client):
         self._index_listener(listener)
 
     @should_patch()
+    def _is_coroutine_callable(self, callback: Callable) -> bool:
+        return iscoroutinefunction(callback) or iscoroutinefunction(
+            getattr(callback, "__call__", None)
+        )
+
+    @should_patch()
+    def _get_timeout_handler_call_args(self, listener: Listener, timeout: Optional[int]):
+        handler = config.timeout_handler
+        args = (listener.identifier, listener, timeout)
+        kwargs = {}
+
+        try:
+            parameters = signature(handler).parameters.values()
+        except (TypeError, ValueError):
+            return args, kwargs
+
+        positional_params = 0
+        accepts_var_positional = False
+        accepts_var_keyword = False
+        has_sent_message_parameter = False
+
+        for parameter in parameters:
+            if parameter.kind == Parameter.VAR_POSITIONAL:
+                accepts_var_positional = True
+                continue
+
+            if parameter.kind == Parameter.VAR_KEYWORD:
+                accepts_var_keyword = True
+                continue
+
+            if parameter.kind in (
+                Parameter.POSITIONAL_ONLY,
+                Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                positional_params += 1
+
+            if parameter.name == "sent_message":
+                has_sent_message_parameter = True
+
+        if accepts_var_positional or positional_params >= 4:
+            return args + (listener.sent_message,), kwargs
+
+        if has_sent_message_parameter or accepts_var_keyword:
+            kwargs["sent_message"] = listener.sent_message
+
+        return args, kwargs
+
+    @should_patch()
+    async def _invoke_callable(self, callback: Callable, *args, **kwargs):
+        if self._is_coroutine_callable(callback):
+            return await callback(*args, **kwargs)
+
+        return await self.loop.run_in_executor(
+            None,
+            partial(callback, *args, **kwargs),
+        )
+
+    @should_patch()
     async def listen(
         self,
         filters: Optional[Filter] = None,
@@ -166,6 +225,7 @@ class Client(pyrogram.Client):
         user_id: Union[Union[int, str], List[Union[int, str]]] = None,
         message_id: Union[int, List[int]] = None,
         inline_message_id: Union[str, List[str]] = None,
+        sent_message=None,
     ):
         pattern = Identifier(
             from_user_id=user_id,
@@ -183,6 +243,7 @@ class Client(pyrogram.Client):
             unallowed_click_alert=unallowed_click_alert,
             identifier=pattern,
             listener_type=listener_type,
+            sent_message=sent_message,
         )
 
         future.add_done_callback(lambda _future: self.remove_listener(listener))
@@ -193,12 +254,12 @@ class Client(pyrogram.Client):
             return await asyncio.wait_for(future, timeout)
         except asyncio.exceptions.TimeoutError:
             if callable(config.timeout_handler):
-                if iscoroutinefunction(config.timeout_handler.__call__):
-                    await config.timeout_handler(pattern, listener, timeout)
-                else:
-                    await self.loop.run_in_executor(
-                        None, config.timeout_handler, pattern, listener, timeout
-                    )
+                handler_args, handler_kwargs = self._get_timeout_handler_call_args(
+                    listener, timeout
+                )
+                await self._invoke_callable(
+                    config.timeout_handler, *handler_args, **handler_kwargs
+                )
             elif config.throw_exceptions:
                 raise ListenerTimeout(timeout)
 
@@ -231,6 +292,7 @@ class Client(pyrogram.Client):
             user_id=user_id,
             message_id=message_id,
             inline_message_id=inline_message_id,
+            sent_message=sent_message,
         )
         if response:
             response.sent_message = sent_message
@@ -332,12 +394,7 @@ class Client(pyrogram.Client):
             return
 
         if callable(config.stopped_handler):
-            if iscoroutinefunction(config.stopped_handler.__call__):
-                await config.stopped_handler(None, listener)
-            else:
-                await self.loop.run_in_executor(
-                    None, config.stopped_handler, None, listener
-                )
+            await self._invoke_callable(config.stopped_handler, None, listener)
         elif config.throw_exceptions:
             listener.future.set_exception(ListenerStopped())
 

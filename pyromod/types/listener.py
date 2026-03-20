@@ -1,6 +1,6 @@
 from asyncio import Future
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from pyrogram.filters import Filter
 
@@ -16,3 +16,4 @@ class Listener:
     identifier: Identifier
     future: Future = None
     callback: Callable = None
+    sent_message: Any = None
