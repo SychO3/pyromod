@@ -118,6 +118,21 @@ rye add pyromod
 
 ## Initialization
 
+### IMPORTANT: Install `uvloop` before importing `pyromod` or `pyrogram`
+
+> **WARNING**
+> If you use `uvloop`, install it before importing `pyromod` or `pyrogram`.
+> This ensures they bind to the correct event loop policy from the start.
+
+```python
+import uvloop
+
+uvloop.install()
+
+from pyromod import Client
+from pyrogram import filters
+```
+
 To initialize pyromod, on the file that creates the client instance, simply import the Client class from pyromod instead
 of pyrogram:
 
