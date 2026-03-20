@@ -18,6 +18,10 @@ You should have received a copy of the GNU General Public License
 along with pyromod.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+from ._compat import ensure_default_event_loop
+
+ensure_default_event_loop()
+
 from .config import config
 from .helpers import ikb, bki, ntb, btn, kb, kbtn, array_chunk, force_reply
 from .listen import Client, MessageHandler, CallbackQueryHandler, Message, Chat, User
