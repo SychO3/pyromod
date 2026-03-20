@@ -16,7 +16,7 @@ bot. These settings allow you to customize the behavior of your bot according to
 | `throw_exceptions`           | bool     | True                                                  | A boolean flag that determines whether pyromod should raise exceptions for certain events.                                                                                                 |
 | `unallowed_click_alert`      | bool     | True                                                  | A boolean flag that controls whether users should be alerted when they click a button that doesn't match the filters (i.e. clicking on a button that is supposed for other user to click). |
 | `unallowed_click_alert_text` | str      | `[pyromod] You're not expected to click this button.` | The text to display in the alert when `unallowed_click_alert` is `True`.                                                                                                                   |
-| `disable_startup_logs`       | bool     | False                                                 | A boolean flag that determines whether the startup message logged by pyromod should be suppressed.                                                                                         |
+| `disable_startup_logs`       | bool     | False                                                 | A boolean flag that determines whether the startup message logged by pyromod should be suppressed. Set it before creating your first `pyromod.Client`.                                    |
 
 ## Example Usage
 

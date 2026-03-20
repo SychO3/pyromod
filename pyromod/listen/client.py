@@ -11,10 +11,21 @@ from ..exceptions import ListenerTimeout, ListenerStopped
 from ..types import ListenerTypes, Identifier, Listener
 from ..utils import should_patch, patch_into
 
-if not config.disable_startup_logs:
-    print(
-        "Pyromod is working! If you like pyromod, please star it at https://github.com/usernein/pyromod"
-    )
+STARTUP_LOG_MESSAGE = (
+    "Pyromod is working! If you like pyromod, please star it at "
+    "https://github.com/usernein/pyromod"
+)
+_startup_log_emitted = False
+
+
+def _emit_startup_log():
+    global _startup_log_emitted
+
+    if _startup_log_emitted or config.disable_startup_logs:
+        return
+
+    print(STARTUP_LOG_MESSAGE)
+    _startup_log_emitted = True
 
 INDEXED_IDENTIFIER_FIELDS = (
     "inline_message_id",
@@ -31,6 +42,7 @@ class Client(pyrogram.Client):
 
     @should_patch()
     def __init__(self, *args, **kwargs):
+        _emit_startup_log()
         self.listeners = {listener_type: [] for listener_type in ListenerTypes}
         self.listener_indexes = {
             listener_type: {

@@ -73,3 +73,14 @@ Example:
 ## Set a custom alert text for unallowed clicks
 config.unallowed_click_alert_text = "Unauthorized action: You cannot click this button."
 ```
+
+#### 6. Disable Startup Logs
+
+Set `disable_startup_logs` to `True` before creating your first `pyromod.Client` if you want to suppress pyromod's startup message.
+
+Example:
+
+```python
+## Disable the startup message
+config.disable_startup_logs = True
+```
