@@ -10,7 +10,9 @@ bot = Client("my_bot")
 
 @bot.on_message(filters.command("ask"))
 async def ask(client:Client, message:types.Message):
-    name = await client.ask(message.chat.id, "What is your name?")
+    name = await client.ask(
+
+    )
     age = await client.ask(message.chat.id, "What is your age?")
     await message.reply_text(f"Hello {name.text}! You are {age.text} years old.")
 
