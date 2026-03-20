@@ -10,12 +10,13 @@ from ..config import config
 from ..types import ListenerTypes, Identifier, Listener
 from ..utils import patch_into, should_patch
 
+LISTENER_CACHE_ATTR = "_pyromod_listener_resolution_cache"
+
 
 @patch_into(pyrogram.handlers.callback_query_handler.CallbackQueryHandler)
 class CallbackQueryHandler(
     pyrogram.handlers.callback_query_handler.CallbackQueryHandler
 ):
-    _listener_cache_attr = "_pyromod_listener_resolution_cache"
     old__init__: Callable
 
     @should_patch()
@@ -25,23 +26,23 @@ class CallbackQueryHandler(
 
     @should_patch()
     def _cache_listener_resolution(self, query: CallbackQuery, resolution):
-        cache = getattr(query, self._listener_cache_attr, None)
+        cache = getattr(query, LISTENER_CACHE_ATTR, None)
         if cache is None:
             cache = {}
-            setattr(query, self._listener_cache_attr, cache)
+            setattr(query, LISTENER_CACHE_ATTR, cache)
 
         cache[id(self)] = resolution
 
     @should_patch()
     def _pop_cached_listener_resolution(self, query: CallbackQuery):
-        cache = getattr(query, self._listener_cache_attr, None)
+        cache = getattr(query, LISTENER_CACHE_ATTR, None)
         if cache is None:
             return None
 
         resolution = cache.pop(id(self), None)
 
         if not cache:
-            delattr(query, self._listener_cache_attr)
+            delattr(query, LISTENER_CACHE_ATTR)
 
         return resolution
 

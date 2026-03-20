@@ -15,6 +15,13 @@ if not config.disable_startup_logs:
         "Pyromod is working! If you like pyromod, please star it at https://github.com/usernein/pyromod"
     )
 
+INDEXED_IDENTIFIER_FIELDS = (
+    "inline_message_id",
+    "message_id",
+    "chat_id",
+    "from_user_id",
+)
+
 
 @patch_into(pyrogram.client.Client)
 class Client(pyrogram.Client):
@@ -24,7 +31,129 @@ class Client(pyrogram.Client):
     @should_patch()
     def __init__(self, *args, **kwargs):
         self.listeners = {listener_type: [] for listener_type in ListenerTypes}
+        self.listener_indexes = {
+            listener_type: {
+                field_name: {"values": {}, "wildcards": {}}
+                for field_name in INDEXED_IDENTIFIER_FIELDS
+            }
+            for listener_type in ListenerTypes
+        }
         self.old__init__(*args, **kwargs)
+
+    @should_patch()
+    def _normalize_identifier_values(self, value):
+        if value is None:
+            return ()
+
+        if isinstance(value, list):
+            return tuple(dict.fromkeys(item for item in value if item is not None))
+
+        return (value,)
+
+    @should_patch()
+    def _index_listener(self, listener: Listener):
+        listener_id = id(listener)
+        field_indexes = self.listener_indexes[listener.listener_type]
+
+        for field_name in INDEXED_IDENTIFIER_FIELDS:
+            field_index = field_indexes[field_name]
+            values = self._normalize_identifier_values(
+                getattr(listener.identifier, field_name)
+            )
+
+            if not values:
+                field_index["wildcards"][listener_id] = listener
+                continue
+
+            for value in values:
+                field_index["values"].setdefault(value, {})[listener_id] = listener
+
+    @should_patch()
+    def _deindex_listener(self, listener: Listener):
+        listener_id = id(listener)
+        field_indexes = self.listener_indexes[listener.listener_type]
+
+        for field_name in INDEXED_IDENTIFIER_FIELDS:
+            field_index = field_indexes[field_name]
+            values = self._normalize_identifier_values(
+                getattr(listener.identifier, field_name)
+            )
+
+            if not values:
+                field_index["wildcards"].pop(listener_id, None)
+                continue
+
+            for value in values:
+                listeners_for_value = field_index["values"].get(value)
+                if listeners_for_value is None:
+                    continue
+
+                listeners_for_value.pop(listener_id, None)
+                if not listeners_for_value:
+                    field_index["values"].pop(value, None)
+
+    @should_patch()
+    def _get_indexed_candidates_for_data(
+        self, data: Identifier, listener_type: ListenerTypes
+    ) -> List[Listener]:
+        best_candidates = None
+        field_indexes = self.listener_indexes[listener_type]
+
+        for field_name in INDEXED_IDENTIFIER_FIELDS:
+            values = self._normalize_identifier_values(getattr(data, field_name))
+            if not values:
+                continue
+
+            field_index = field_indexes[field_name]
+            candidate_map = dict(field_index["wildcards"])
+
+            for value in values:
+                candidate_map.update(field_index["values"].get(value, {}))
+
+            if best_candidates is None or len(candidate_map) < len(best_candidates):
+                best_candidates = candidate_map
+
+            if best_candidates is not None and len(best_candidates) <= 1:
+                break
+
+        if best_candidates is None:
+            return list(self.listeners[listener_type])
+
+        return list(best_candidates.values())
+
+    @should_patch()
+    def _get_indexed_candidates_for_pattern(
+        self, pattern: Identifier, listener_type: ListenerTypes
+    ) -> List[Listener]:
+        best_candidates = None
+        field_indexes = self.listener_indexes[listener_type]
+
+        for field_name in INDEXED_IDENTIFIER_FIELDS:
+            values = self._normalize_identifier_values(getattr(pattern, field_name))
+            if not values:
+                continue
+
+            field_index = field_indexes[field_name]
+            candidate_map = {}
+
+            for value in values:
+                candidate_map.update(field_index["values"].get(value, {}))
+
+            if best_candidates is None or len(candidate_map) < len(best_candidates):
+                best_candidates = candidate_map
+
+            if best_candidates is not None and len(best_candidates) <= 1:
+                break
+
+        if best_candidates is None:
+            return list(self.listeners[listener_type])
+
+        return list(best_candidates.values())
+
+    @should_patch()
+    def _add_listener(self, listener: Listener):
+        self.listeners[listener.listener_type].append(listener)
+        self._index_listener(listener)
 
     @should_patch()
     async def listen(
@@ -45,7 +174,7 @@ class Client(pyrogram.Client):
             inline_message_id=inline_message_id,
         )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
 
         listener = Listener(
@@ -58,7 +187,7 @@ class Client(pyrogram.Client):
 
         future.add_done_callback(lambda _future: self.remove_listener(listener))
 
-        self.listeners[listener_type].append(listener)
+        self._add_listener(listener)
 
         try:
             return await asyncio.wait_for(future, timeout)
@@ -112,6 +241,7 @@ class Client(pyrogram.Client):
     def remove_listener(self, listener: Listener):
         try:
             self.listeners[listener.listener_type].remove(listener)
+            self._deindex_listener(listener)
         except ValueError:
             pass
 
@@ -120,7 +250,7 @@ class Client(pyrogram.Client):
         self, data: Identifier, listener_type: ListenerTypes
     ) -> Optional[Listener]:
         matching = []
-        for listener in self.listeners[listener_type]:
+        for listener in self._get_indexed_candidates_for_data(data, listener_type):
             if listener.identifier.matches(data):
                 matching.append(listener)
 
@@ -130,11 +260,14 @@ class Client(pyrogram.Client):
 
         return max(matching, key=count_populated_attributes, default=None)
 
+    @should_patch()
     def get_listener_matching_with_identifier_pattern(
         self, pattern: Identifier, listener_type: ListenerTypes
     ) -> Optional[Listener]:
         matching = []
-        for listener in self.listeners[listener_type]:
+        for listener in self._get_indexed_candidates_for_pattern(
+            pattern, listener_type
+        ):
             if pattern.matches(listener.identifier):
                 matching.append(listener)
 
@@ -152,7 +285,7 @@ class Client(pyrogram.Client):
         listener_type: ListenerTypes,
     ) -> List[Listener]:
         listeners = []
-        for listener in self.listeners[listener_type]:
+        for listener in self._get_indexed_candidates_for_data(data, listener_type):
             if listener.identifier.matches(data):
                 listeners.append(listener)
         return listeners
@@ -164,7 +297,9 @@ class Client(pyrogram.Client):
         listener_type: ListenerTypes,
     ) -> List[Listener]:
         listeners = []
-        for listener in self.listeners[listener_type]:
+        for listener in self._get_indexed_candidates_for_pattern(
+            pattern, listener_type
+        ):
             if pattern.matches(listener.identifier):
                 listeners.append(listener)
         return listeners
@@ -233,4 +368,4 @@ class Client(pyrogram.Client):
             listener_type=listener_type,
         )
 
-        self.listeners[listener_type].append(listener)
+        self._add_listener(listener)

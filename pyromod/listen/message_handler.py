@@ -9,10 +9,11 @@ from .client import Client
 from ..types import ListenerTypes, Identifier
 from ..utils import should_patch, patch_into
 
+LISTENER_CACHE_ATTR = "_pyromod_listener_resolution_cache"
+
 
 @patch_into(pyrogram.handlers.message_handler.MessageHandler)
 class MessageHandler(pyrogram.handlers.message_handler.MessageHandler):
-    _listener_cache_attr = "_pyromod_listener_resolution_cache"
     filters: Filter
     old__init__: Callable
 
@@ -23,23 +24,23 @@ class MessageHandler(pyrogram.handlers.message_handler.MessageHandler):
 
     @should_patch()
     def _cache_listener_resolution(self, message: Message, resolution):
-        cache = getattr(message, self._listener_cache_attr, None)
+        cache = getattr(message, LISTENER_CACHE_ATTR, None)
         if cache is None:
             cache = {}
-            setattr(message, self._listener_cache_attr, cache)
+            setattr(message, LISTENER_CACHE_ATTR, cache)
 
         cache[id(self)] = resolution
 
     @should_patch()
     def _pop_cached_listener_resolution(self, message: Message):
-        cache = getattr(message, self._listener_cache_attr, None)
+        cache = getattr(message, LISTENER_CACHE_ATTR, None)
         if cache is None:
             return None
 
         resolution = cache.pop(id(self), None)
 
         if not cache:
-            delattr(message, self._listener_cache_attr)
+            delattr(message, LISTENER_CACHE_ATTR)
 
         return resolution
 
