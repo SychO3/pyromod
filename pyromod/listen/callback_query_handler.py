@@ -15,12 +15,35 @@ from ..utils import patch_into, should_patch
 class CallbackQueryHandler(
     pyrogram.handlers.callback_query_handler.CallbackQueryHandler
 ):
+    _listener_cache_attr = "_pyromod_listener_resolution_cache"
     old__init__: Callable
 
     @should_patch()
     def __init__(self, callback: Callable, filters: Filter = None):
         self.original_callback = callback
         self.old__init__(self.resolve_future_or_callback, filters)
+
+    @should_patch()
+    def _cache_listener_resolution(self, query: CallbackQuery, resolution):
+        cache = getattr(query, self._listener_cache_attr, None)
+        if cache is None:
+            cache = {}
+            setattr(query, self._listener_cache_attr, cache)
+
+        cache[id(self)] = resolution
+
+    @should_patch()
+    def _pop_cached_listener_resolution(self, query: CallbackQuery):
+        cache = getattr(query, self._listener_cache_attr, None)
+        if cache is None:
+            return None
+
+        resolution = cache.pop(id(self), None)
+
+        if not cache:
+            delattr(query, self._listener_cache_attr)
+
+        return resolution
 
     @should_patch()
     def compose_data_identifier(self, query: CallbackQuery):
@@ -48,9 +71,9 @@ class CallbackQueryHandler(
 
     @should_patch()
     async def check_if_has_matching_listener(
-        self, client: Client, query: CallbackQuery
+        self, client: Client, query: CallbackQuery, data: Identifier = None
     ) -> Tuple[bool, Listener]:
-        data = self.compose_data_identifier(query)
+        data = data or self.compose_data_identifier(query)
 
         listener = client.get_listener_matching_with_data(
             data, ListenerTypes.CALLBACK_QUERY
@@ -74,9 +97,9 @@ class CallbackQueryHandler(
 
     @should_patch()
     async def check(self, client: Client, query: CallbackQuery):
-        listener_does_match, listener = await self.check_if_has_matching_listener(
-            client, query
-        )
+        data = self.compose_data_identifier(query)
+        resolution = await self.check_if_has_matching_listener(client, query, data)
+        listener_does_match, listener = resolution
 
         if callable(self.filters):
             if iscoroutinefunction(self.filters.__call__):
@@ -88,27 +111,25 @@ class CallbackQueryHandler(
         else:
             handler_does_match = True
 
-        data = self.compose_data_identifier(query)
-
-        if config.unallowed_click_alert:
-            # matches with the current query but from any user
+        if config.unallowed_click_alert and not listener_does_match:
+            # Match any listener attached to this callback target, regardless of user.
             permissive_identifier = Identifier(
                 chat_id=data.chat_id,
                 message_id=data.message_id,
                 inline_message_id=data.inline_message_id,
                 from_user_id=None,
             )
-
-            matches = permissive_identifier.matches(data)
+            permissive_listener = client.get_listener_matching_with_identifier_pattern(
+                permissive_identifier, ListenerTypes.CALLBACK_QUERY
+            )
 
             if (
-                listener
-                and (matches and not listener_does_match)
-                and listener.unallowed_click_alert
+                permissive_listener
+                and permissive_listener.unallowed_click_alert
             ):
                 alert = (
-                    listener.unallowed_click_alert
-                    if isinstance(listener.unallowed_click_alert, str)
+                    permissive_listener.unallowed_click_alert
+                    if isinstance(permissive_listener.unallowed_click_alert, str)
                     else config.unallowed_click_alert_text
                 )
                 await query.answer(alert)
@@ -116,15 +137,32 @@ class CallbackQueryHandler(
 
         # let handler get the chance to handle if listener
         # exists but its filters doesn't match
-        return listener_does_match or handler_does_match
+        should_handle_update = listener_does_match or handler_does_match
+
+        if should_handle_update:
+            self._cache_listener_resolution(query, resolution)
+
+        return should_handle_update
 
     @should_patch()
     async def resolve_future_or_callback(
         self, client: Client, query: CallbackQuery, *args
     ):
-        listener_does_match, listener = await self.check_if_has_matching_listener(
-            client, query
-        )
+        resolution = self._pop_cached_listener_resolution(query)
+
+        if resolution is None:
+            resolution = await self.check_if_has_matching_listener(client, query)
+
+        listener_does_match, listener = resolution
+
+        if (
+            listener
+            and listener_does_match
+            and listener not in client.listeners[listener.listener_type]
+        ):
+            listener_does_match, listener = await self.check_if_has_matching_listener(
+                client, query
+            )
 
         if listener and listener_does_match:
             client.remove_listener(listener)
