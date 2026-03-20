@@ -46,13 +46,18 @@ def ntb(button):
     for btn_type in [
         "callback_data",
         "url",
+        "web_app",
+        "login_url",
+        "user_id",
         "switch_inline_query",
         "switch_inline_query_current_chat",
         "callback_game",
     ]:
-        value = getattr(button, btn_type)
-        if value:
+        value = getattr(button, btn_type, None)
+        if value is not None:
             break
+    else:
+        raise ValueError("InlineKeyboardButton has no supported payload field")
     button = [button.text, value]
     if btn_type != "callback_data":
         button.append(btn_type)
@@ -68,10 +73,9 @@ def kb(rows=None, **kwargs):
     for row in rows:
         line = []
         for button in row:
-            button_type = type(button)
-            if button_type == str:
+            if isinstance(button, str):
                 button = KeyboardButton(button)
-            elif button_type == dict:
+            elif isinstance(button, dict):
                 button = KeyboardButton(**button)
 
             line.append(button)
